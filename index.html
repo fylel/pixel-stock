@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>像素股神模擬器</title>
+<link href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#0f0f23; --panel:#1a1a3a; --line:#4a4aff; --text:#e0e0ff; --up:#ff4d4d; --down:#3dff7a; --gold:#ffd93d; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:'DotGothic16',monospace; padding:16px; image-rendering:pixelated; }
+  .wrap { max-width:900px; margin:0 auto; }
+  h1 { text-align:center; color:var(--gold); text-shadow:3px 3px 0 #b8336a; font-size:28px; margin:8px 0 16px; letter-spacing:2px; }
+  .box { background:var(--panel); border:4px solid var(--line); box-shadow:6px 6px 0 #000; padding:12px; margin-bottom:16px; }
+  .stats { display:flex; flex-wrap:wrap; gap:12px; justify-content:space-between; font-size:18px; }
+  .stats b { color:var(--gold); }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:700px){ .grid{ grid-template-columns:1fr; } h1{font-size:22px;} }
+  table { width:100%; border-collapse:collapse; font-size:15px; }
+  td,th { padding:6px 4px; border-bottom:2px dashed #33336a; text-align:left; }
+  tr.stock { cursor:pointer; }
+  tr.stock:hover, tr.sel { background:#2a2a5a; }
+  .up { color:var(--up); } .down { color:var(--down); }
+  canvas { width:100%; background:#000; border:3px solid #33336a; display:block; }
+  button, input { font-family:inherit; font-size:16px; }
+  button { background:var(--gold); color:#000; border:none; padding:8px 14px; box-shadow:4px 4px 0 #000; cursor:pointer; margin:4px 4px 4px 0; }
+  button:active { transform:translate(4px,4px); box-shadow:none; }
+  button.red { background:var(--up); } button.green { background:var(--down); }
+  input { width:80px; padding:6px; background:#000; color:var(--text); border:3px solid var(--line); }
+  #log { height:150px; overflow-y:auto; font-size:14px; line-height:1.6; }
+  #log div { border-bottom:1px dotted #33336a; }
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.85); display:none; align-items:center; justify-content:center; }
+  .modal .box { text-align:center; max-width:360px; }
+  .rank { font-size:36px; color:var(--gold); margin:12px 0; }
+  .blink { animation:b 1s steps(2) infinite; } @keyframes b { 50% { opacity:0; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>📈 像素股神模擬器 📉</h1>
+
+  <div class="box stats">
+    <span>📅 第 <b id="day">1</b> / 30 天</span>
+    <span>💰 現金 $<b id="cash">0</b></span>
+    <span>🏦 總資產 $<b id="total">0</b></span>
+  </div>
+
+  <div class="grid">
+    <div class="box">
+      <table>
+        <thead><tr><th>股票</th><th>股價</th><th>漲跌</th><th>持有</th></tr></thead>
+        <tbody id="market"></tbody>
+      </table>
+    </div>
+    <div class="box">
+      <div>📊 <span id="selName"></span> 走勢</div>
+      <canvas id="chart" width="320" height="160"></canvas>
+      <div style="margin-top:10px">
+        數量 <input type="number" id="qty" value="10" min="1">
+        <button class="red" onclick="trade(1)">買進</button>
+        <button class="green" onclick="trade(-1)">賣出</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="box">
+    <button id="playBtn" onclick="togglePlay()">▶ 開始</button>
+    <button onclick="nextDay()">⏭ 下一天</button>
+    <button onclick="init()">🔄 重新開始</button>
+    <span id="hint" class="blink">按「開始」讓時間流動！</span>
+  </div>
+
+  <div class="box"><div>📰 市場新聞</div><div id="log"></div></div>
+</div>
+
+<div class="modal" id="end">
+  <div class="box">
+    <div>🏁 遊戲結束</div>
+    <div>最終資產 $<span id="final"></span></div>
+    <div id="pct"></div>
+    <div class="rank" id="rank"></div>
+    <button onclick="init()">再玩一次</button>
+  </div>
+</div>
+
+<script>
+const START_CASH = 10000, DAYS = 30;
+const NEWS = [
+  ["發表新產品，市場驚艷！", 0.15], ["獲得大筆訂單！", 0.10], ["老闆上電視掛保證", 0.06],
+  ["工廠停電一整天", -0.08], ["被爆出財報造假疑雲", -0.18], ["執行長突然辭職", -0.12],
+  ["網紅開箱好評爆棚", 0.08], ["產品被消基會點名", -0.10]
+];
+let stocks, cash, day, sel, timer;
+
+function init() {
+  clearInterval(timer); timer = null;
+  stocks = [
+    { name:"珍奶科技", price:50 },  { name:"雞排半導體", price:120 },
+    { name:"鹹酥雞航運", price:30 }, { name:"滷味金控", price:80 },
+    { name:"夜市電動車", price:200 }
+  ].map(s => ({ ...s, hist:[s.price], held:0, vol:0.03 + Math.random()*0.04 }));
+  cash = START_CASH; day = 1; sel = 0;
+  document.getElementById("log").innerHTML = "";
+  document.getElementById("end").style.display = "none";
+  document.getElementById("playBtn").textContent = "▶ 開始";
+  log("🔔 開盤！你有 $10,000，30 天內盡量賺錢吧！");
+  render();
+}
+
+function nextDay() {
+  if (day >= DAYS) return;
+  day++;
+  const newsIdx = Math.random() < 0.4 ? Math.floor(Math.random()*stocks.length) : -1;
+  stocks.forEach((s, i) => {
+    let change = (Math.random()*2 - 1) * s.vol + 0.003;
+    if (i === newsIdx) {
+      const [text, eff] = NEWS[Math.floor(Math.random()*NEWS.length)];
+      change += eff;
+      log(`${eff > 0 ? "🚀" : "💥"} 第${day}天：${s.name}${text}`);
+    }
+    s.price = Math.max(1, Math.round(s.price * (1 + change) * 100) / 100);
+    s.hist.push(s.price);
+  });
+  render();
+  if (day >= DAYS) endGame();
+}
+
+function trade(dir) {
+  const s = stocks[sel], q = Math.floor(+document.getElementById("qty").value);
+  if (!(q > 0) || day >= DAYS) return;
+  const cost = s.price * q;
+  if (dir > 0) {
+    if (cost > cash) return log("❌ 現金不夠啦！");
+    cash -= cost; s.held += q; log(`🟥 買進 ${s.name} ${q} 股，花費 $${cost.toFixed(0)}`);
+  } else {
+    if (q > s.held) return log("❌ 你沒有那麼多股！");
+    cash += cost; s.held -= q; log(`🟩 賣出 ${s.name} ${q} 股，入帳 $${cost.toFixed(0)}`);
+  }
+  render();
+}
+
+function totalAssets() { return cash + stocks.reduce((t, s) => t + s.price * s.held, 0); }
+
+function render() {
+  document.getElementById("day").textContent = day;
+  document.getElementById("cash").textContent = cash.toFixed(0);
+  document.getElementById("total").textContent = totalAssets().toFixed(0);
+  document.getElementById("market").innerHTML = stocks.map((s, i) => {
+    const prev = s.hist[s.hist.length - 2] ?? s.price;
+    const pct = (s.price - prev) / prev * 100;
+    const cls = pct > 0 ? "up" : pct < 0 ? "down" : "";
+    return `<tr class="stock ${i === sel ? "sel" : ""}" onclick="sel=${i};render()">
+      <td>${s.name}</td><td>${s.price.toFixed(2)}</td>
+      <td class="${cls}">${pct > 0 ? "▲" : pct < 0 ? "▼" : "-"}${Math.abs(pct).toFixed(1)}%</td><td>${s.held}</td></tr>`;
+  }).join("");
+  document.getElementById("selName").textContent = stocks[sel].name;
+  drawChart();
+}
+
+function drawChart() {
+  const c = document.getElementById("chart"), g = c.getContext("2d");
+  const h = stocks[sel].hist, W = c.width, H = c.height, bw = W / DAYS;
+  g.fillStyle = "#000"; g.fillRect(0, 0, W, H);
+  g.fillStyle = "#1a1a3a";
+  for (let y = 0; y < H; y += 20) g.fillRect(0, y, W, 1);
+  const max = Math.max(...h) * 1.05, min = Math.min(...h) * 0.95, span = max - min || 1;
+  h.forEach((p, i) => {
+    const prev = h[i - 1] ?? p;
+    const y = Math.min(H - 4, Math.round((H - (p - min) / span * H) / 4) * 4);
+    g.fillStyle = p >= prev ? "#ff4d4d" : "#3dff7a";
+    g.fillRect(Math.floor(i * bw), y, Math.max(4, Math.floor(bw) - 2), H - y);
+  });
+}
+
+function togglePlay() {
+  const btn = document.getElementById("playBtn");
+  document.getElementById("hint").style.display = "none";
+  if (timer) { clearInterval(timer); timer = null; btn.textContent = "▶ 繼續"; }
+  else { timer = setInterval(nextDay, 2500); btn.textContent = "⏸ 暫停"; }
+}
+
+function endGame() {
+  clearInterval(timer); timer = null;
+  const t = totalAssets(), pct = (t - START_CASH) / START_CASH * 100;
+  const rank = pct >= 50 ? "👑 股神" : pct >= 15 ? "😎 高手" : pct >= 0 ? "🙂 散戶" : "🥬 韭菜";
+  document.getElementById("final").textContent = t.toFixed(0);
+  document.getElementById("pct").textContent = `報酬率 ${pct.toFixed(1)}%`;
+  document.getElementById("rank").textContent = rank;
+  document.getElementById("end").style.display = "flex";
+}
+
+function log(msg) {
+  const el = document.getElementById("log");
+  el.insertAdjacentHTML("afterbegin", `<div>${msg}</div>`);
+}
+
+init();
+</script>
+</body>
+</html>
